@@ -107,20 +107,22 @@ async function sanitizeImages(ctx, messages) {
  */
 export function registerTwinAdapters(ctx, llm, getConfig) {
   if (!llm || !getConfig) return 0;
-  const map = selectedMap(getConfig);
-  const providers = new Set();
-  for (const key of map.keys()) {
-    const prov = key.split('/')[0];
-    if (prov) providers.add(prov);
-  }
 
-  const restores = [];
-  let count = 0;
-  for (const provider of providers) {
+  /** provider -> the real adapter last wrapped (for restore on dispose). */
+  const wrapped = new Map();
+
+  /** Wrap the provider adapter unless it is already our twin proxy. */
+  function wrapProvider(provider) {
     let reg;
-    try { reg = llm.registration(provider); } catch { continue; }
-    if (!reg || !reg.adapter) continue;
+    try { reg = llm.registration(provider); } catch { return; }
+    if (!reg || !reg.adapter) return;
+    // dsh-llm replaces reg.adapter when providers/adapters are updated
+    // (e.g. adding a provider). Skip when it is already our twin proxy to
+    // avoid nesting; otherwise wrap the current real adapter.
+    // (__picturereaderTwin marks proxies created here.)
+    if (reg.adapter?.__picturereaderTwin) return;
     const orig = reg.adapter;
+    wrapped.set(provider, orig);
 
     const origList = orig.listModels.bind(orig);
     const origResolve = orig.resolveModel.bind(orig);
@@ -128,6 +130,7 @@ export function registerTwinAdapters(ctx, llm, getConfig) {
 
     const twin = new Proxy(orig, {
       get(target, prop, receiver) {
+        if (prop === '__picturereaderTwin') return true;
         if (prop === 'listModels') {
           return async (p) => (await origList(p)).map((m) => applyVisionMeta(m, p, getConfig));
         }
@@ -148,17 +151,33 @@ export function registerTwinAdapters(ctx, llm, getConfig) {
     });
 
     reg.adapter = twin;
-    restores.push({ reg, orig });
-    count++;
   }
 
-  if (count > 0) console.log(`[picturereader] vision twin active on provider(s): ${[...providers].join(', ')}`);
-
-  if (restores.length > 0) {
-    ctx.effect(
-      () => () => { for (const { reg, orig } of restores) reg.adapter = orig; },
-      'picturereader: vision twin restore',
-    );
+  // Initial wrap: providers owning selected models.
+  const initial = selectedMap(getConfig);
+  for (const key of initial.keys()) wrapProvider(key.split('/')[0]);
+  if (wrapped.size > 0) {
+    console.log(`[picturereader] vision twin active on provider(s): ${[...wrapped.keys()].join(', ')}`);
   }
-  return count;
+
+  // dsh-llm dispatches "llm/adapters-updated" when providers/adapters change
+  // (new provider added, plugin updated). Re-wrap on that event so the twin
+  // proxy survives adapter replacement without requiring a DSH restart.
+  const onAdaptersUpdated = () => {
+    const current = selectedMap(getConfig);
+    for (const key of current.keys()) wrapProvider(key.split('/')[0]);
+  };
+  ctx.on('llm/adapters-updated', onAdaptersUpdated);
+
+  // On dispose: unbind the event and restore each provider's real adapter.
+  ctx.effect(() => () => {
+    ctx.off('llm/adapters-updated', onAdaptersUpdated);
+    for (const [provider, orig] of wrapped) {
+      try {
+        const reg = llm.registration(provider);
+        if (reg) reg.adapter = orig;
+      } catch { /* provider no longer registered; ignore */ }
+    }
+  });
+  return wrapped.size;
 }
