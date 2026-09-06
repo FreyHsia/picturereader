@@ -35,7 +35,7 @@ import z from '@deepseek-ai/schemastery';
 import { ensureSettingsNamespaceExposed } from './settings-expose.js';
 import { setRuntimeSource, getRuntimeConfig } from './runtime.js';
 import { attachImageBridge } from './bridge.js';
-import { registerTwinAdapters } from './picturereader-vision.mjs';
+import { registerTwinAdapters, refreshTwinAdapters } from './picturereader-vision.mjs';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -343,7 +343,7 @@ export function apply(ctx, config) {
     const settingsNs = settingsNamespace(NS);
     const scope = sctx.settings.register(settingsNs, Config, { base: config });
     sourceGetter = () => scope.get();
-    scope.watch(() => { /* 触发热更 */ });
+    scope.watch(() => { refreshTwinAdapters(ctx, llm, getConfig); /* 勾选模型热更新孪生包装 */ });
 
     // ── 扫描所有 provider 的文本模型 → 写入 available_text_models ──
     (async () => {
