@@ -351,12 +351,29 @@ window.__ModuleLoader__.load({
 
       function saveSelection(list) {
         console.log('[picturereader] saveSelection called with', list.length, 'models:', JSON.stringify(list.map(function(m) { return m.id; })));
+        // DIAG: scope 方法列表 + 当前快照状态（0.1.2 兼容诊断）
+        try {
+          console.log('[picturereader][diag] scope methods:', Object.keys(scope).filter(function (k) { return typeof scope[k] === 'function'; }).join(','));
+          var _snap = scope.getSnapshot();
+          console.log('[picturereader][diag] snapshot:', JSON.stringify({ status: _snap && _snap.status, writable: _snap && _snap.writable, mode: _snap && _snap.mode, revision: _snap && _snap.revision }));
+        } catch (e) { console.error('[picturereader][diag] scope introspect failed:', e); }
         // Track last saved value to prevent scope sync from overwriting
         if (VisionBridgePicker._lastSavedRef) VisionBridgePicker._lastSavedRef(list);
-        scope.set("vision_models", list).then(function () {
+        var _setPromise;
+        try {
+          _setPromise = scope.set("vision_models", list);
+        } catch (e) {
+          console.error('[picturereader][diag] scope.set THREW synchronously:', e && e.stack || e);
+        }
+        Promise.resolve(_setPromise).then(function () {
           console.log('[picturereader] vision_models saved successfully');
+          // DIAG: 写后快照 user 层验证（0.1.2 写后必须检查落盘）
+          try {
+            var _s2 = scope.getSnapshot();
+            console.log('[picturereader][diag] after-save snapshot user.vision_models:', JSON.stringify(_s2 && _s2.user && _s2.user.vision_models));
+          } catch (e) { console.error('[picturereader][diag] after-save read failed:', e); }
         }).catch(function (err) {
-          console.error('[picturereader] vision_models save failed:', err);
+          console.error('[picturereader] vision_models save failed:', err && err.stack || err);
         });
       }
 
