@@ -30,12 +30,10 @@ import { createImageBatchTool } from './image-batch.js';
 import { createDocumentToImageTool } from './doc-tools.js';
 import { createImageEditTool } from './image-edit.js';
 import { NS } from './config.js';
-import { settingsNamespace } from '@deepseek-ai/dsh-settings';
 import z from '@deepseek-ai/schemastery';
-import { ensureSettingsNamespaceExposed } from './settings-expose.js';
 import { setRuntimeSource, getRuntimeConfig } from './runtime.js';
 import { attachImageBridge } from './bridge.js';
-import { registerTwinAdapters } from './picturereader-vision.mjs';
+import { registerTwinAdapters, refreshTwinAdapters } from './picturereader-vision.mjs';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -271,13 +269,7 @@ export const inject = ['tools', 'fs', 'llm', 'attachments'];
 export function apply(ctx, config) {
   // 内核 0.1.2 起 settings-controller 的 describe() 原生枚举全部注册命名空间
   // （rc.2 时代 dsh-host-apiproxy 的 WEB_SETTINGS_NAMESPACES 白名单连同整个
-  // apiproxy 包已被移除），本补丁退役；调用注释保留作老内核回退参考。
-  // try {
-  //   ensureSettingsNamespaceExposed(ctx, NS, ctx.logger);
-  // } catch (error) {
-  //   ctx.logger?.warn?.(`[picturereader] settings-expose failed: ${String(error)}`);
-  // }
-
+  // apiproxy 包已被移除），本补丁退役；调用已删除（原 ensureSettingsNamespaceExposed）。
   // ── 运行时快照：工具执行时惰性读最新 mode / VLM 配置 ──
   let sourceGetter = null;
   const getConfig = () => (sourceGetter ? sourceGetter() : config);
@@ -340,10 +332,10 @@ export function apply(ctx, config) {
   // ── 设置命名空间 + 模型扫描 + 视觉孪生路由（需要 settings 和 llm 服务）──
   ctx.inject(['settings', 'llm'], (sctx) => {
     const llm = sctx.llm;
-    const settingsNs = settingsNamespace(NS);
-    const scope = sctx.settings.register(settingsNs, Config, { base: config });
+    // dsh-settings ≥0.1.2：register 直接接收命名空间短名（旧版 settingsNamespace() 已移除）
+    const scope = sctx.settings.register(NS, Config, { base: config });
     sourceGetter = () => scope.get();
-    scope.watch(() => { /* 触发热更 */ });
+    scope.watch(() => { refreshTwinAdapters(ctx, llm, getConfig); /* 勾选模型热更新孪生包装 */ });
 
     // ── 扫描所有 provider 的文本模型 → 写入 available_text_models ──
     (async () => {
