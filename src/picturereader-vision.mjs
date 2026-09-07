@@ -194,11 +194,13 @@ function wrapProvider(state, ctx, llm, provider, getConfig) {
           if (result && result.model) result.model = applyVisionMeta(result.model, p, getConfig);
           if (result && typeof result.stream === 'function') {
             const preparedStream = result.stream.bind(result);
-            result.stream = async (options) => {
+            // 必须是异步生成器：dsh-llm 对 stream() 的返回值做 for await
+            // （要求 [Symbol.asyncIterator]）；async 函数返回 Promise 会崩。
+            result.stream = async function* (options) {
               if (options?.messages?.some((msg) => contentHasImage(msg?.content))) {
                 options = { ...options, messages: await sanitizeImages(ctx, options.messages) };
               }
-              return preparedStream(options);
+              yield* preparedStream(options);
             };
           }
           return result;
