@@ -259,31 +259,19 @@ window.__ModuleLoader__.load({
       var editingRef = react.useRef(false);
       var editTimerRef = react.useRef(null);
 
-      // Sync selected from scope: subscribe + load on mount
+      // Sync selected from scope: read on mount + react to external changes
+      // (e.g. after the save button writes vision_models). Local edits stay in
+      // draft (via props.onDraft) until the save button commits them.
       react.useEffect(function () {
         var alive = true;
-        var lastSavedRef = null; // Track last saved value to prevent overwrite
-        // DIAG: 挂载时快照完整状态（重开设置页后 scope 是否失效）
-        try {
-          var _mSnap = scope.getSnapshot();
-          console.log('[picturereader][diag] mount snapshot:', JSON.stringify({
-            status: _mSnap && _mSnap.status, writable: _mSnap && _mSnap.writable,
-            mode: _mSnap && _mSnap.mode, revision: _mSnap && _mSnap.revision,
-            value: _mSnap && _mSnap.value, user: _mSnap && _mSnap.user
-          }));
-        } catch (e) { console.error('[picturereader][diag] mount snapshot failed:', e); }
         function syncFromScope() {
           if (!alive) return;
           var snap = scope.getSnapshot();
           if (snap.status === "ready" && snap.value) {
             var sel = snap.value.vision_models;
             if (Array.isArray(sel)) {
-              // If we just saved and the value matches what we saved, skip
-              if (lastSavedRef && JSON.stringify(sel) === JSON.stringify(lastSavedRef)) {
-                lastSavedRef = null;
-                return;
-              }
               setSelected(sel);
+              if (props.onDraft) props.onDraft(sel);
             }
           }
         }
@@ -300,12 +288,9 @@ window.__ModuleLoader__.load({
         var unsubscribe = typeof scope.subscribe === "function" ? scope.subscribe(function () {
           if (alive) syncFromScope();
         }) : null;
-        // Expose lastSavedRef for saveSelection
-        VisionBridgePicker._lastSavedRef = function(val) { lastSavedRef = val; };
         return function () {
           alive = false;
           if (unsubscribe) unsubscribe();
-          VisionBridgePicker._lastSavedRef = null;
         };
       }, [scope]);
 
@@ -344,7 +329,7 @@ window.__ModuleLoader__.load({
           next = selected.concat([{ id: model.id, provider: model.provider, note: "" }]);
         }
         setSelected(next);
-        saveSelection(next);
+        if (props.onDraft) props.onDraft(next);
       }
 
       // Update note for a selected model
@@ -355,35 +340,7 @@ window.__ModuleLoader__.load({
           return m;
         });
         setSelected(next);
-        saveSelection(next);
-      }
-
-      function saveSelection(list) {
-        console.log('[picturereader] saveSelection called with', list.length, 'models:', JSON.stringify(list.map(function(m) { return m.id; })));
-        // Track last saved value to prevent scope sync from overwriting
-        if (VisionBridgePicker._lastSavedRef) VisionBridgePicker._lastSavedRef(list);
-        // 空列表 = 无勾选 = 让字段回落 schema 默认 []（0.1.2 下写空数组会被
-        // merge/persist 层静默丢弃，改用 unset 删除字段达到同一语义）
-        var _writePromise;
-        try {
-          if (list.length === 0) {
-            _writePromise = scope.unset("vision_models");
-          } else {
-            _writePromise = scope.set("vision_models", list);
-          }
-        } catch (e) {
-          console.error('[picturereader][diag] write THREW synchronously:', e && e.stack || e);
-        }
-        Promise.resolve(_writePromise).then(function () {
-          console.log('[picturereader] vision_models saved successfully');
-          // DIAG: 写后快照 user 层验证（0.1.2 写后必须检查落盘）
-          try {
-            var _s2 = scope.getSnapshot();
-            console.log('[picturereader][diag] after-save user.vision_models:', JSON.stringify(_s2 && _s2.user && _s2.user.vision_models));
-          } catch (e) { console.error('[picturereader][diag] after-save read failed:', e); }
-        }).catch(function (err) {
-          console.error('[picturereader] vision_models save failed:', err && err.stack || err);
-        });
+        if (props.onDraft) props.onDraft(next);
       }
 
       var isSelected = function (m) {
@@ -523,6 +480,16 @@ window.__ModuleLoader__.load({
           if (str.trim() === "") { ops.push({ op: "unset", key: f.key }); return; }
           ops.push({ op: "set", key: f.key, value: str });
         });
+        // vision_models：由 VisionBridgePicker 的草稿（draft["vision_models"]）驱动，
+        // 点保存才提交——空列表走 unset（回落 schema 默认 []），非空走 set。
+        if (draft["vision_models"] !== void 0) {
+          var vm = draft["vision_models"];
+          if (Array.isArray(vm) && vm.length === 0) {
+            ops.push({ op: "unset", key: "vision_models" });
+          } else {
+            ops.push({ op: "set", key: "vision_models", value: vm });
+          }
+        }
         var writes = ops.map(function (o) {
           return o.op === "set" ? scope.set(o.key, o.value) : scope.unset(o.key);
         });
@@ -622,7 +589,7 @@ window.__ModuleLoader__.load({
         h("div", { className: "__pr_card" },
           h("h3", { className: "__pr_cardTitle" }, t("visionBridgeModels")),
           h("p", { className: "__pr_subHint" }, t("visionBridgeModelsHint")),
-          h(VisionBridgePicker, { t: t, scope: scope })
+          h(VisionBridgePicker, { t: t, scope: scope, onDraft: function (v) { setDraft(function (prev) { var n = Object.assign({}, prev); n["vision_models"] = v; return n; }); } })
         ),
         // 外部视觉 API
         h("div", { className: "__pr_card" },
