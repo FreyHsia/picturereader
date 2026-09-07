@@ -442,7 +442,10 @@ window.__ModuleLoader__.load({
         var alive = true;
         var sync = function () { if (alive) setSnapshot(scope.getSnapshot()); };
         var un = typeof scope.subscribe === "function" ? scope.subscribe(sync) : null;
-        return function () { alive = false; if (un) un(); if (scope.dispose) scope.dispose(); };
+        // 注意：卸载时只退订、不 dispose scope——scope 属于插件 fiber 生命周期
+        // （apply 时 bind），组件卸载销毁它会令"关闭设置页再重开"后写失效
+        // （0.1.2 scope 有 dispose 后触发该回归）。
+        return function () { alive = false; if (un) un(); };
       }, [scope]);
       react.useEffect(function () {
         // Fill the draft from the resolved value once, but never overwrite keys
