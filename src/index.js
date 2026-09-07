@@ -335,7 +335,8 @@ export function apply(ctx, config) {
     // dsh-settings ≥0.1.2：register 直接接收命名空间短名（旧版 settingsNamespace() 已移除）
     const scope = sctx.settings.register(NS, Config, { base: config });
     sourceGetter = () => scope.get();
-    scope.watch(() => { refreshTwinAdapters(ctx, llm, getConfig); /* 勾选模型热更新孪生包装 */ });
+    // DIAG-BISECT: 热启用临时移除（watch 空回调）验证"重开写失效"是否由热启用引入
+    scope.watch(() => { /* 热启用暂停：二分定位重开写失效回归 */ });
 
     // ── 扫描所有 provider 的文本模型 → 写入 available_text_models ──
     (async () => {
