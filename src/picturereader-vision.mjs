@@ -198,7 +198,12 @@ function wrapProvider(state, ctx, llm, provider, getConfig) {
             // （要求 [Symbol.asyncIterator]）；async 函数返回 Promise 会崩。
             result.stream = async function* (options) {
               if (options?.messages?.some((msg) => contentHasImage(msg?.content))) {
-                options = { ...options, messages: await sanitizeImages(ctx, options.messages) };
+                // 防御：图片分析失败时原样放行，绝不让流中断污染会话
+                try {
+                  options = { ...options, messages: await sanitizeImages(ctx, options.messages) };
+                } catch (e) {
+                  console.error('[picturereader] sanitizeImages failed, forwarding original messages:', e?.message || e);
+                }
               }
               yield* preparedStream(options);
             };
@@ -209,7 +214,11 @@ function wrapProvider(state, ctx, llm, provider, getConfig) {
       if (prop === 'stream') {
         return async function* (options) {
           if (options?.messages?.some((msg) => contentHasImage(msg?.content))) {
-            options = { ...options, messages: await sanitizeImages(ctx, options.messages) };
+            try {
+              options = { ...options, messages: await sanitizeImages(ctx, options.messages) };
+            } catch (e) {
+              console.error('[picturereader] sanitizeImages failed, forwarding original messages:', e?.message || e);
+            }
           }
           yield* origStream(options);
         };
