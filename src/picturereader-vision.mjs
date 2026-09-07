@@ -171,6 +171,7 @@ function wrapProvider(state, ctx, llm, provider, getConfig) {
 
   const origList = orig.listModels.bind(orig);
   const origResolve = orig.resolveModel.bind(orig);
+  const origPrepare = typeof orig.prepareCall === 'function' ? orig.prepareCall.bind(orig) : null;
   const origStream = orig.stream.bind(orig);
 
   const twin = new Proxy(orig, {
@@ -181,6 +182,15 @@ function wrapProvider(state, ctx, llm, provider, getConfig) {
       }
       if (prop === 'resolveModel') {
         return async (p, m, signal) => applyVisionMeta(await origResolve(p, m, signal), p, getConfig);
+      }
+      if (prop === 'prepareCall' && origPrepare) {
+        // dsh-llm 用 prepareCall 返回的 model 做能力判定（inputModalities），
+        // 必须同样注入视觉元数据，否则模型被判定 text-only、图片被省略。
+        return async (p, m, signal) => {
+          const result = await origPrepare(p, m, signal);
+          if (result && result.model) result.model = applyVisionMeta(result.model, p, getConfig);
+          return result;
+        };
       }
       if (prop === 'stream') {
         return async function* (options) {
