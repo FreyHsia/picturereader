@@ -263,6 +263,15 @@ window.__ModuleLoader__.load({
       react.useEffect(function () {
         var alive = true;
         var lastSavedRef = null; // Track last saved value to prevent overwrite
+        // DIAG: 挂载时快照完整状态（重开设置页后 scope 是否失效）
+        try {
+          var _mSnap = scope.getSnapshot();
+          console.log('[picturereader][diag] mount snapshot:', JSON.stringify({
+            status: _mSnap && _mSnap.status, writable: _mSnap && _mSnap.writable,
+            mode: _mSnap && _mSnap.mode, revision: _mSnap && _mSnap.revision,
+            value: _mSnap && _mSnap.value, user: _mSnap && _mSnap.user
+          }));
+        } catch (e) { console.error('[picturereader][diag] mount snapshot failed:', e); }
         function syncFromScope() {
           if (!alive) return;
           var snap = scope.getSnapshot();
