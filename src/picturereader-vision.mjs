@@ -12,7 +12,10 @@
  * @module picturereader/picturereader-vision
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFileAsync = promisify(execFileCb);
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -59,15 +62,26 @@ function applyVisionMeta(model, provider, getConfig) {
   return out;
 }
 
-/** 把图片字节落盘为临时文件，返回路径。 */
+/** 把图片字节落盘为临时文件，返回工具链可读的路径。 */
 async function saveImageBytes(bytes, mediaType) {
   await mkdir(IMAGE_DIR, { recursive: true });
   const hash = createHash('sha1').update(bytes).digest('hex').slice(0, 24);
   const ext = mediaType === 'image/jpeg' ? '.jpg'
-    : mediaType === 'image/webp' ? '.webp'
+    : mediaType === 'image/webp' ? '.png'   // 工具链不支持 webp：落盘转 png
       : mediaType === 'image/gif' ? '.gif' : '.png';
   const path = join(IMAGE_DIR, hash + ext);
   try { await writeFile(path, bytes, { flag: 'wx' }); } catch (e) { if (e?.code !== 'EEXIST') throw e; }
+  // dsh 0.1.2 附件归一化常产出 webp（PNG 带 alpha → webp），而本地工具链
+  // （image_scan/OCR）只读 png/jpg/gif/bmp。webp 字节需转 png 再落盘，
+  // 否则分析链断在格式。用 sips（macOS 原生）转换；其他平台留 TODO。
+  if (mediaType === 'image/webp') {
+    const tmp = path + '.tmp.webp';
+    await writeFile(tmp, bytes, { flag: 'wx' }).catch(() => {});
+    try {
+      await execFileAsync('sips', ['-s', 'format', 'png', tmp, '--out', path]);
+    } catch { /* 转换失败保留原字节，工具链可能仍可读或报不支持 */ }
+    await rm(tmp, { force: true }).catch(() => {});
+  }
   return path;
 }
 
