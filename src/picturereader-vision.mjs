@@ -12,14 +12,13 @@
  * @module picturereader/picturereader-vision
  */
 
-import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-const execFileAsync = promisify(execFileCb);
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { contentHasImage } from '@deepseek-ai/dsh-llm';
+import * as webpWasm from 'webp-wasm';
+import { PNG } from 'pngjs';
 
 const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh');
 const IMAGE_DIR = join(DSH_HOME, 'picturereader-vision', 'images');
@@ -70,18 +69,22 @@ async function saveImageBytes(bytes, mediaType) {
     : mediaType === 'image/webp' ? '.png'   // 工具链不支持 webp：落盘转 png
       : mediaType === 'image/gif' ? '.gif' : '.png';
   const path = join(IMAGE_DIR, hash + ext);
-  try { await writeFile(path, bytes, { flag: 'wx' }); } catch (e) { if (e?.code !== 'EEXIST') throw e; }
   // dsh 0.1.2 附件归一化常产出 webp（PNG 带 alpha → webp），而本地工具链
-  // （image_scan/OCR）只读 png/jpg/gif/bmp。webp 字节需转 png 再落盘，
-  // 否则分析链断在格式。用 sips（macOS 原生）转换；其他平台留 TODO。
+  // （image_scan/OCR）只读 png/jpg/gif/bmp。webp 需转 png 再落盘，否则分析链
+  // 断在格式。用 libwebp→WASM（webp-wasm，纯字节码全平台一致）解码成 RGBA，
+  // 再经项目已有依赖 pngjs 编码为 PNG——零额外原生依赖、零用户操作。
   if (mediaType === 'image/webp') {
-    const tmp = path + '.tmp.webp';
-    await writeFile(tmp, bytes, { flag: 'wx' }).catch(() => {});
     try {
-      await execFileAsync('sips', ['-s', 'format', 'png', tmp, '--out', path]);
-    } catch { /* 转换失败保留原字节，工具链可能仍可读或报不支持 */ }
-    await rm(tmp, { force: true }).catch(() => {});
+      const rgba = await webpWasm.decode(bytes);
+      const png = new PNG({ width: rgba.width, height: rgba.height });
+      Buffer.from(rgba.data).copy(png.data);
+      await writeFile(path, PNG.sync.write(png), { flag: 'wx' }).catch((e) => { if (e?.code !== 'EEXIST') throw e; });
+      return path;
+    } catch (e) {
+      console.error('[picturereader] webp decode failed, falling back to raw bytes:', e?.message || e);
+    }
   }
+  try { await writeFile(path, bytes, { flag: 'wx' }); } catch (e) { if (e?.code !== 'EEXIST') throw e; }
   return path;
 }
 
