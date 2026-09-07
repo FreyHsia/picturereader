@@ -17,7 +17,10 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { contentHasImage } from '@deepseek-ai/dsh-llm';
-import * as webpWasm from 'webp-wasm';
+import webpWasm from 'webp-wasm';
+import { promisify } from 'node:util';
+// webp-wasm decode 依赖 this=模块对象且为 callback 风格：bind 保 this + promisify 适配
+const decodeWebpAsync = promisify(webpWasm.decode.bind(webpWasm));
 import { PNG } from 'pngjs';
 
 const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh');
@@ -75,7 +78,8 @@ async function saveImageBytes(bytes, mediaType) {
   // 再经项目已有依赖 pngjs 编码为 PNG——零额外原生依赖、零用户操作。
   if (mediaType === 'image/webp') {
     try {
-      const rgba = await webpWasm.decode(bytes);
+      await promisify(webpWasm.loadDecoder.bind(webpWasm))(); // 首次需加载 wasm
+      const rgba = await decodeWebpAsync(bytes);
       const png = new PNG({ width: rgba.width, height: rgba.height });
       Buffer.from(rgba.data).copy(png.data);
       await writeFile(path, PNG.sync.write(png), { flag: 'wx' }).catch((e) => { if (e?.code !== 'EEXIST') throw e; });
