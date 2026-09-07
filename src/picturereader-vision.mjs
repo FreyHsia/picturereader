@@ -184,11 +184,23 @@ function wrapProvider(state, ctx, llm, provider, getConfig) {
         return async (p, m, signal) => applyVisionMeta(await origResolve(p, m, signal), p, getConfig);
       }
       if (prop === 'prepareCall' && origPrepare) {
-        // dsh-llm 用 prepareCall 返回的 model 做能力判定（inputModalities），
-        // 必须同样注入视觉元数据，否则模型被判定 text-only、图片被省略。
+        // dsh-llm 的能力判定与流调度都走 prepareCall 返回的对象：
+        //   model.inputModalities -> 图片能力判定（缺则图片被省略）
+        //   stream               -> 实际流入口（缺图片拦截则 pi-ai 报
+        //                            "does not support image input"）
+        // 两个都必须包装：注入视觉元数据 + 拦截图片转本地分析文本。
         return async (p, m, signal) => {
           const result = await origPrepare(p, m, signal);
           if (result && result.model) result.model = applyVisionMeta(result.model, p, getConfig);
+          if (result && typeof result.stream === 'function') {
+            const preparedStream = result.stream.bind(result);
+            result.stream = async (options) => {
+              if (options?.messages?.some((msg) => contentHasImage(msg?.content))) {
+                options = { ...options, messages: await sanitizeImages(ctx, options.messages) };
+              }
+              return preparedStream(options);
+            };
+          }
           return result;
         };
       }
